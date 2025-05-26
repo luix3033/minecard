@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Construtor AR Cardboard</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="block-placer.js" defer></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    /* Estilo para o vídeo da câmera ocupar o fundo */
+    #cameraFeed {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover; /* Para cobrir toda a área */
+      z-index: -1; /* Coloca atrás da cena A-Frame */
+    }
+    /* Garante que a cena A-Frame tenha fundo transparente */
+    a-scene {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+<body>
+  <video id="cameraFeed" autoplay playsinline muted></video>
+
+  <a-scene
+    vr-mode-ui="enabled: true"
+    renderer="alpha: true; antialias: true;" block-placer="gridSize: 0.5"> <a-plane
+      id="placementPlane"
+      position="0 0 -3"  /* Um pouco à frente da câmera, ajuste Y conforme necessário */
+      rotation="-90 0 0"
+      width="20"
+      height="20"
+      material="visible: false; transparent: true; opacity: 0.1" /* Pode ser visível para debug */
+      class="raycastable"> </a-plane>
+
+    <a-light type="ambient" color="#BBB"></a-light>
+    <a-light type="directional" color="#FFF" intensity="0.6" position="-0.5 1 1"></a-light>
+
+    <a-entity id="playerCamera" camera position="0 0.5 0" look-controls wasd-controls="enabled:false">
+      <a-entity
+        id="cursor"
+        cursor="fuse: true; fuseTimeout: 1500; rayOrigin: mouse"
+        raycaster="objects: .raycastable, .placeable-block; far: 5" /* Mira em objetos com a classe 'raycastable' ou 'placeable-block' */
+        position="0 0 -0.75" /* Um pouco à frente da câmera */
+        geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
+        material="color: white; shader: flat; opacity: 0.8">
+        <a-animation begin="fusing" easing="ease-in" attribute="scale"
+                     fill="forwards" from="1 1 1" to="0.2 0.2 0.2" dur="1500"></a-animation>
+      </a-entity>
+
+      <a-entity id="blockPreview"
+        geometry="primitive: box; width: 0.48; height: 0.48; depth: 0.48" /* Um pouco menor que a grade */
+        material="color: orange; opacity: 0.5; transparent: true"
+        position="0 0 -1.5" /* Posição relativa à câmera, será atualizada pelo script */
+        visible="false">
+      </a-entity>
+    </a-camera>
+
+  </a-scene>
+
+  <script>
+    // Script para iniciar a câmera
+    const videoElement = document.getElementById('cameraFeed');
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }) // 'environment' para câmera traseira
+        .then(function(stream) {
+          videoElement.srcObject = stream;
+          videoElement.play();
+        })
+        .catch(function(err) {
+          console.error("Erro ao acessar a câmera: ", err);
+          alert("Não foi possível acessar a câmera. Verifique as permissões.");
+        });
+    } else {
+      alert("Seu navegador não suporta acesso à câmera via getUserMedia.");
+    }
+  </script>
+</body>
+</html>
