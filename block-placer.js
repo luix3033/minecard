@@ -1,94 +1,80 @@
-AFRAME.registerComponent('block-placer', {
-  schema: {
-    gridSize: { type: 'number', default: 0.5 }, // Tamanho da célula da grade (ex: 0.5 = 50cm)
-    blockColor: { type: 'color', default: '#4CC3D9' }
-  },
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Construtor AR Cardboard</title>
+  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
+  <script src="block-placer.js" defer></script>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    /* O CSS para #cameraFeed não é mais necessário aqui,
+       pois o vídeo será gerenciado dentro do A-Frame.
+       Mas precisamos de um <video> para ser a fonte. */
+  </style>
+</head>
+<body>
+  <video id="cameraVideoAsset" autoplay playsinline muted style="display:none;"></video>
 
-  init: function () {
-    this.cursor = document.getElementById('cursor');
-    this.blockPreview = document.getElementById('blockPreview');
-    this.placementPlane = document.getElementById('placementPlane'); // Nosso plano invisível
-    this.sceneEl = this.el; // a-scene
+  <a-scene
+    vr-mode-ui="enabled: true"
+    renderer="antialias: true;" block-placer="gridSize: 0.5">
 
-    this.handleRaycasterIntersection = this.handleRaycasterIntersection.bind(this);
-    this.handlePlaceBlock = this.handlePlaceBlock.bind(this);
+    <a-assets>
+      <video id="cameraFeedTexture" src="#cameraVideoAsset" autoplay loop="false" playsinline muted></video>
+    </a-assets>
 
-    this.cursor.addEventListener('raycaster-intersection', this.handleRaycasterIntersection);
-    this.cursor.addEventListener('click', this.handlePlaceBlock); // 'click' é emitido pelo fuse do cursor
-  },
+    <a-sky src="#cameraFeedTexture" rotation="0 -90 0"></a-sky> <a-plane
+      id="placementPlane"
+      position="0 0 -3"
+      rotation="-90 0 0"
+      width="20"
+      height="20"
+      material="visible: false; transparent: true; opacity: 0.1"
+      class="raycastable">
+    </a-plane>
 
-  remove: function () {
-    this.cursor.removeEventListener('raycaster-intersection', this.handleRaycasterIntersection);
-    this.cursor.removeEventListener('click', this.handlePlaceBlock);
-  },
+    <a-light type="ambient" color="#FFF"></a-light> <a-entity id="playerCamera" camera position="0 0.5 0" look-controls wasd-controls="enabled:false">
+      <a-entity
+        id="cursor"
+        cursor="fuse: true; fuseTimeout: 1500;" raycaster="objects: .raycastable, .placeable-block; far: 5"
+        position="0 0 -0.75"
+        geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
+        material="color: white; shader: flat; opacity: 0.8">
+        <a-animation begin="fusing" easing="ease-in" attribute="scale"
+                     fill="forwards" from="1 1 1" to="0.2 0.2 0.2" dur="1500"></a-animation>
+      </a-entity>
+      <a-entity id="blockPreview"
+        geometry="primitive: box; width: 0.48; height: 0.48; depth: 0.48"
+        material="color: orange; opacity: 0.5; transparent: true"
+        position="0 0 -1.5"
+        visible="false">
+      </a-entity>
+    </a-entity>
+  </a-scene>
 
-  handleRaycasterIntersection: function (evt) {
-    if (!this.blockPreview || !evt.detail.els.length) {
-      if (this.blockPreview) this.blockPreview.setAttribute('visible', false);
-      return;
-    }
+  <script>
+    // Script para iniciar a câmera e conectar ao asset de vídeo
+    const videoAssetElement = document.getElementById('cameraVideoAsset'); // O <video> escondido
+    const aFrameVideoTexture = document.getElementById('cameraFeedTexture'); // O <video> dentro de <a-assets>
 
-    // Pega o primeiro objeto intersectado
-    const intersection = evt.detail.intersections[0];
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+        .then(function(stream) {
+          // Conecta o stream ao elemento <video> que serve de asset
+          videoAssetElement.srcObject = stream;
+          videoAssetElement.play(); // Garante que o vídeo no asset comece a tocar
 
-    // Só mostra a pré-visualização se estivermos mirando no plano de construção ou em outro bloco
-    if (intersection.object.el.id === 'placementPlane' || intersection.object.el.classList.contains('placeable-block')) {
-      const point = intersection.point;
-      const gridSize = this.data.gridSize;
-
-      // Calcula a posição na grade
-      // Adiciona metade do gridSize para centralizar o bloco na célula da grade
-      // Se estiver colocando em cima de outro bloco, calcula a posição em relação à face do bloco.
-      let snappedX, snappedY, snappedZ;
-
-      if (intersection.object.el.id === 'placementPlane') {
-        snappedX = Math.round(point.x / gridSize) * gridSize;
-        snappedY = Math.round(point.y / gridSize) * gridSize + (gridSize / 2); // Coloca em cima do plano
-        snappedZ = Math.round(point.z / gridSize) * gridSize;
-        this.placementPlane.setAttribute('position', `0 ${snappedY - (gridSize / 2) -0.01} -3`); // Move o plano para baixo do bloco atual
-      } else if (intersection.object.el.classList.contains('placeable-block')) {
-        // Lógica para empilhar blocos:
-        const targetBlockPosition = intersection.object.el.getAttribute('position');
-        const faceNormal = intersection.face.normal; // Normal da face atingida
-
-        // Calcula a posição do novo bloco adjacente ao bloco existente
-        snappedX = targetBlockPosition.x + faceNormal.x * gridSize;
-        snappedY = targetBlockPosition.y + faceNormal.y * gridSize;
-        snappedZ = targetBlockPosition.z + faceNormal.z * gridSize;
-
-        // Arredonda para a grade para garantir alinhamento, caso a face não seja perfeitamente alinhada
-        snappedX = Math.round(snappedX / gridSize) * gridSize;
-        snappedY = Math.round(snappedY / gridSize) * gridSize;
-        snappedZ = Math.round(snappedZ / gridSize) * gridSize;
-      }
-
-
-      this.blockPreview.setAttribute('position', `${snappedX} ${snappedY} ${snappedZ}`);
-      this.blockPreview.setAttribute('visible', true);
-      this.lastValidPosition = { x: snappedX, y: snappedY, z: snappedZ }; // Salva a última posição válida
+          // A-Frame deve pegar o stream do #cameraVideoAsset automaticamente para #cameraFeedTexture
+          // Mas às vezes é preciso dar um "play" explícito no asset do A-Frame também,
+          // especialmente após o stream ser atribuído.
+          // No entanto, o atributo 'autoplay' no <video> dentro de <a-assets> deve cuidar disso.
+        })
+        .catch(function(err) {
+          console.error("Erro ao acessar a câmera: ", err);
+          alert("Não foi possível acessar a câmera. Verifique as permissões.");
+        });
     } else {
-      this.blockPreview.setAttribute('visible', false);
-      this.lastValidPosition = null;
+      alert("Seu navegador não suporta acesso à câmera via getUserMedia.");
     }
-  },
-
-  handlePlaceBlock: function () {
-    if (this.blockPreview && this.blockPreview.getAttribute('visible') && this.lastValidPosition) {
-      const newBlock = document.createElement('a-box');
-      newBlock.setAttribute('position', this.lastValidPosition);
-      newBlock.setAttribute('width', this.data.gridSize * 0.95); // Um pouco menor para ver as bordas
-      newBlock.setAttribute('height', this.data.gridSize * 0.95);
-      newBlock.setAttribute('depth', this.data.gridSize * 0.95);
-      newBlock.setAttribute('color', this.data.blockColor);
-      newBlock.setAttribute('shadow', "cast: true; receive: false");
-      newBlock.classList.add('placeable-block'); // Para poder mirar nele depois
-      newBlock.classList.add('raycastable');     // Para o raycaster interagir
-
-      // Adiciona uma física simples se quiser que os blocos caiam (requer aframe-physics-system)
-      // newBlock.setAttribute('static-body', ''); // ou dynamic-body
-
-      this.sceneEl.appendChild(newBlock);
-      console.log('Bloco colocado em:', this.lastValidPosition);
-    }
-  }
-});
+  </script>
+</body>
+</html>
