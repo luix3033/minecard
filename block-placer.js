@@ -1,80 +1,132 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Construtor AR Cardboard</title>
-  <script src="https://aframe.io/releases/1.5.0/aframe.min.js"></script>
-  <script src="block-placer.js" defer></script>
-  <style>
-    body { margin: 0; overflow: hidden; }
-    /* O CSS para #cameraFeed não é mais necessário aqui,
-       pois o vídeo será gerenciado dentro do A-Frame.
-       Mas precisamos de um <video> para ser a fonte. */
-  </style>
-</head>
-<body>
-  <video id="cameraVideoAsset" autoplay playsinline muted style="display:none;"></video>
+AFRAME.registerComponent('block-placer', {
+  schema: {
+    gridSize: { type: 'number', default: 0.5 }, // Tamanho da célula da grade e do bloco
+    blockColor: { type: 'color', default: '#4CC3D9' }
+  },
 
-  <a-scene
-    vr-mode-ui="enabled: true"
-    renderer="antialias: true;" block-placer="gridSize: 0.5">
+  init: function () {
+    this.cursor = document.getElementById('cursor');
+    this.blockPreview = document.getElementById('blockPreview');
+    this.groundPlane = document.getElementById('groundPlane'); // Referência ao chão
+    this.sceneEl = this.el;
 
-    <a-assets>
-      <video id="cameraFeedTexture" src="#cameraVideoAsset" autoplay loop="false" playsinline muted></video>
-    </a-assets>
+    // Configura a geometria do bloco de pré-visualização com base no gridSize
+    const previewSize = this.data.gridSize * 0.98; // Ligeiramente menor para evitar z-fighting e dar contorno
+    this.blockPreview.setAttribute('geometry', {
+      primitive: 'box',
+      width: previewSize,
+      height: previewSize,
+      depth: previewSize
+    });
 
-    <a-sky src="#cameraFeedTexture" rotation="0 -90 0"></a-sky> <a-plane
-      id="placementPlane"
-      position="0 0 -3"
-      rotation="-90 0 0"
-      width="20"
-      height="20"
-      material="visible: false; transparent: true; opacity: 0.1"
-      class="raycastable">
-    </a-plane>
+    this.handleRaycasterIntersection = this.handleRaycasterIntersection.bind(this);
+    this.handlePlaceBlock = this.handlePlaceBlock.bind(this);
+    this.updatePreviewVisibility = this.updatePreviewVisibility.bind(this);
 
-    <a-light type="ambient" color="#FFF"></a-light> <a-entity id="playerCamera" camera position="0 0.5 0" look-controls wasd-controls="enabled:false">
-      <a-entity
-        id="cursor"
-        cursor="fuse: true; fuseTimeout: 1500;" raycaster="objects: .raycastable, .placeable-block; far: 5"
-        position="0 0 -0.75"
-        geometry="primitive: ring; radiusInner: 0.01; radiusOuter: 0.015"
-        material="color: white; shader: flat; opacity: 0.8">
-        <a-animation begin="fusing" easing="ease-in" attribute="scale"
-                     fill="forwards" from="1 1 1" to="0.2 0.2 0.2" dur="1500"></a-animation>
-      </a-entity>
-      <a-entity id="blockPreview"
-        geometry="primitive: box; width: 0.48; height: 0.48; depth: 0.48"
-        material="color: orange; opacity: 0.5; transparent: true"
-        position="0 0 -1.5"
-        visible="false">
-      </a-entity>
-    </a-entity>
-  </a-scene>
+    this.cursor.addEventListener('raycaster-intersection', this.handleRaycasterIntersection);
+    this.cursor.addEventListener('raycaster-intersection-cleared', this.updatePreviewVisibility); // Esconde o preview se não mirar em nada
+    this.cursor.addEventListener('click', this.handlePlaceBlock); // 'click' é emitido pelo fuse do cursor
 
-  <script>
-    // Script para iniciar a câmera e conectar ao asset de vídeo
-    const videoAssetElement = document.getElementById('cameraVideoAsset'); // O <video> escondido
-    const aFrameVideoTexture = document.getElementById('cameraFeedTexture'); // O <video> dentro de <a-assets>
+    this.lastValidPosition = null;
+    this.intersectionData = null; // Para armazenar dados da última interseção válida
+  },
 
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-      navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-        .then(function(stream) {
-          // Conecta o stream ao elemento <video> que serve de asset
-          videoAssetElement.srcObject = stream;
-          videoAssetElement.play(); // Garante que o vídeo no asset comece a tocar
+  remove: function () {
+    this.cursor.removeEventListener('raycaster-intersection', this.handleRaycasterIntersection);
+    this.cursor.removeEventListener('raycaster-intersection-cleared', this.updatePreviewVisibility);
+    this.cursor.removeEventListener('click', this.handlePlaceBlock);
+  },
 
-          // A-Frame deve pegar o stream do #cameraVideoAsset automaticamente para #cameraFeedTexture
-          // Mas às vezes é preciso dar um "play" explícito no asset do A-Frame também,
-          // especialmente após o stream ser atribuído.
-          // No entanto, o atributo 'autoplay' no <video> dentro de <a-assets> deve cuidar disso.
-        })
-        .catch(function(err) {
-          console.error("Erro ao acessar a câmera: ", err);
-          alert("Não foi possível acessar a câmera. Verifique as permissões.");
-        });
-    } else {
-      alert("Seu navegador não suporta acesso à câmera via getUserMedia.");
+  updatePreviewVisibility: function() {
+    // Chamado quando o raycaster não atinge mais nada ou atinge algo inválido
+    if (this.blockPreview) {
+      this.blockPreview.setAttribute('visible', false);
     }
-  </script>
-</body>
-</html>
+    this.lastValidPosition = null;
+    this.intersectionData = null;
+  },
+
+  handleRaycasterIntersection: function (evt) {
+    if (!this.blockPreview || !evt.detail.els.length) {
+      this.updatePreviewVisibility();
+      return;
+    }
+
+    const intersection = evt.detail.intersections[0]; // Pega a primeira interseção válida
+    const targetEl = intersection.object.el;
+
+    if (!targetEl.classList.contains('raycastable')) { // Verifica se é um alvo válido
+        this.updatePreviewVisibility();
+        return;
+    }
+
+    const point = intersection.point;
+    const faceNormal = intersection.face.normal;
+    const gridSize = this.data.gridSize;
+    let snappedX, snappedY, snappedZ;
+
+    if (targetEl.id === 'groundPlane') {
+      snappedX = Math.round(point.x / gridSize) * gridSize;
+      snappedY = gridSize / 2; // Metade da altura do bloco, sobre o chão (Y=0)
+      snappedZ = Math.round(point.z / gridSize) * gridSize;
+    } else if (targetEl.classList.contains('placeable-block')) {
+      const targetBlockPosition = targetEl.getAttribute('position');
+
+      // Calcula a posição do novo bloco adjacente ao bloco existente usando a normal da face
+      snappedX = targetBlockPosition.x + faceNormal.x * gridSize;
+      snappedY = targetBlockPosition.y + faceNormal.y * gridSize;
+      snappedZ = targetBlockPosition.z + faceNormal.z * gridSize;
+
+      // Arredonda para a grade para garantir alinhamento, pois a face normal pode não ser perfeita
+      // e para garantir que o centro do novo bloco esteja na grade.
+      snappedX = Math.round(snappedX / gridSize) * gridSize;
+      snappedY = Math.round(snappedY / gridSize) * gridSize; // Garante que Y também caia na grade
+      snappedZ = Math.round(snappedZ / gridSize) * gridSize;
+
+    } else {
+      this.updatePreviewVisibility(); // Não é um alvo válido
+      return;
+    }
+
+    this.blockPreview.setAttribute('position', `${snappedX} ${snappedY} ${snappedZ}`);
+    this.blockPreview.setAttribute('visible', true);
+    this.lastValidPosition = { x: snappedX, y: snappedY, z: snappedZ };
+    this.intersectionData = intersection; // Guardar para usar ao colocar o bloco
+  },
+
+  handlePlaceBlock: function () {
+    if (this.blockPreview && this.blockPreview.getAttribute('visible') && this.lastValidPosition) {
+      // Verifica se já existe um bloco na posição (prevenção simples de sobreposição)
+      const existingBlocks = this.sceneEl.querySelectorAll('.placeable-block');
+      let canPlace = true;
+      for (let i = 0; i < existingBlocks.length; i++) {
+        const pos = existingBlocks[i].getAttribute('position');
+        if (pos.x === this.lastValidPosition.x &&
+            pos.y === this.lastValidPosition.y &&
+            pos.z === this.lastValidPosition.z) {
+          canPlace = false;
+          break;
+        }
+      }
+
+      if (!canPlace) {
+        console.log("Já existe um bloco aqui!");
+        return;
+      }
+
+      const newBlock = document.createElement('a-box');
+      newBlock.setAttribute('position', this.lastValidPosition);
+      const blockSize = this.data.gridSize; // Blocos têm o tamanho exato da grade
+      newBlock.setAttribute('width', blockSize);
+      newBlock.setAttribute('height', blockSize);
+      newBlock.setAttribute('depth', blockSize);
+      newBlock.setAttribute('color', this.data.blockColor);
+      newBlock.setAttribute('shadow', "cast: true; receive: true");
+      newBlock.classList.add('placeable-block'); // Para poder mirar nele depois
+      newBlock.classList.add('raycastable');     // Para o raycaster interagir com ele
+
+      this.sceneEl.appendChild(newBlock);
+      console.log('Bloco colocado em:', this.lastValidPosition);
+    }
+  }
+});
